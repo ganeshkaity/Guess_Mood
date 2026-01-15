@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Face Guess — age & mood (demo)</title>
+  <!-- Minimal Tailwind (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html,body{height:100%}
+    .video-wrapper{position:relative;display:inline-block}
+    canvas.overlay{position:absolute;left:0;top:0}
+    .chip{background:rgba(0,0,0,0.6);color:white;padding:6px 10px;border-radius:999px;font-weight:600}
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 flex items-center justify-center min-h-screen p-4">
+  <div class="w-full max-w-3xl">
+    <header class="mb-4 text-center">
+      <h1 class="text-2xl font-bold">Face Guess — Age & Mood (demo)</h1>
+      <p class="text-sm text-slate-300">Simple HTML/CSS/JS demo using face-api in the browser. Open in a secure context (https or localhost) and allow webcam.</p>
+    </header>
+
+    <div class="bg-slate-800 p-4 rounded-lg shadow-lg">
+      <div class="flex gap-4 items-start">
+        <div class="video-wrapper">
+          <video id="video" autoplay muted playsinline width="640" height="480" class="rounded-md"></video>
+          <canvas id="overlay" class="overlay" width="640" height="480"></canvas>
+        </div>
+
+        <div class="flex-1">
+          <div class="space-y-3">
+            <div class="chip" id="status">Loading models...</div>
+            <div class="p-3 bg-slate-700 rounded">
+              <h3 class="font-semibold">Latest read</h3>
+              <p id="readout" class="mt-2 text-slate-200">—</p>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <footer class="mt-4 text-xs text-slate-400">Built with face-api.js (browser models). Keep camera permission enabled while testing.</footer>
+    </div>
+  </div>
+
+  <!-- Use a maintained build of face-api (vladmandic fork) from unpkg -->
+  <script type="module">
+import * as faceapi from 'https://unpkg.com/@vladmandic/face-api/dist/face-api.esm.js';
+
+const video = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const ctx = overlay.getContext('2d');
+const statusEl = document.getElementById('status');
+const readoutEl = document.getElementById('readout');
+const ageBuffer = [];
+const AGE_BUFFER_SIZE = 10;
+
+async function setup() {
+  statusEl.textContent = 'Loading models...';
+
+  // load models from ./models
+  await faceapi.nets.tinyFaceDetector.loadFromUri('./models');
+  await faceapi.nets.faceLandmark68TinyNet.loadFromUri('./models');
+  await faceapi.nets.faceExpressionNet.loadFromUri('./models');
+  await faceapi.nets.ageGenderNet.loadFromUri('./models');
+
+  statusEl.textContent = 'Models loaded — starting camera';
+  const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+  video.srcObject = stream;
+  video.addEventListener('loadedmetadata', () => {
+    overlay.width = video.videoWidth || 640;
+    overlay.height = video.videoHeight || 480;
+    runDetection();
+  });
+}
+
+async function runDetection() {
+  const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
+
+  async function tick() {
+    if (video.paused || video.ended) return requestAnimationFrame(tick);
+
+    const result = await faceapi
+      .detectAllFaces(video, options)
+      .withFaceLandmarks(true)
+      .withFaceExpressions()
+      .withAgeAndGender();
+
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+    if (result && result.length > 0) {
+      const r = result[0];
+      const box = r.detection.box;
+
+      ctx.strokeStyle = '#00FFCC';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(box.x, box.y, box.width, box.height);
+
+      const rawAge = r.age || 0;
+      ageBuffer.push(rawAge);
+      if (ageBuffer.length > AGE_BUFFER_SIZE) ageBuffer.shift();
+      const smoothAge = Math.round(ageBuffer.reduce((a,b)=>a+b,0)/ageBuffer.length);
+
+      const expressions = r.expressions || {};
+      const bestExpr = Object.keys(expressions).reduce((a,b)=> expressions[a] > expressions[b] ? a : b);
+      const exprProb = expressions[bestExpr] ? Math.round(expressions[bestExpr]*100) : 0;
+
+      const gender = r.gender || 'unknown';
+      const genderProb = r.genderProbability ? Math.round(r.genderProbability*100) : 0;
+
+      const label = `${smoothAge} yrs — ${bestExpr} (${exprProb}%) — ${gender} (${genderProb}%)`;
+      ctx.font = '16px system-ui';
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      const textWidth = ctx.measureText(label).width + 12;
+      ctx.fillRect(box.x, box.y - 28, textWidth, 26);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(label, box.x + 6, box.y - 10);
+
+      readoutEl.innerHTML = `Age estimate: <strong>${smoothAge} yrs</strong><br>Expression: <strong>${bestExpr}</strong> (${exprProb}%)<br>Gender: <strong>${gender}</strong> (${genderProb}%)`;
+      statusEl.textContent = 'Tracking face — predictions are approximate';
+    } else {
+      statusEl.textContent = 'No face detected';
+      readoutEl.textContent = '—';
+    }
+
+    requestAnimationFrame(tick);
+  }
+
+  tick();
+}
+
+// start everything
+setup();
+</script>
+
+
+  <!--
+    Notes / model download links:
+    - face-api.js docs & repo: https://justadudewhohacks.github.io/face-api.js/ and https://github.com/justadudewhohacks/face-api.js
+    - The vladmandic fork is actively maintained and has working builds/demos: https://github.com/vladmandic/face-api and https://vladmandic.github.io/face-api/demo/webcam.html
+
+    To run locally:
+    1) Save this file as `index.html`.
+    2) Create a folder named `models` next to it and copy the model files (e.g. tiny_face_detector_model-weights_manifest.json, face_expression_model-weights_manifest.json, age_gender_model-weights_manifest.json, face_landmark_68_tiny_model-weights_manifest.json and their shard files) into that folder. See the face-api repos for the models.
+    3) Run a local server: `python -m http.server 8000` and open http://localhost:8000
+  -->
+</body>
+</html>
